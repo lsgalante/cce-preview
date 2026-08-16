@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Preview
+GenericName=Document Viewer
+Comment=View PDFs and images
+Exec=cce-preview %f
+Icon=cce-preview
+Terminal=false
+Categories=Graphics;Viewer;
+MimeType=application/pdf;image/png;image/jpeg;image/gif;image/webp;image/bmp;image/tiff;image/vnd.microsoft.icon;
+NoDisplay=false
