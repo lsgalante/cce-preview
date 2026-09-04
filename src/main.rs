@@ -19,6 +19,7 @@ use wayland_client::QueueHandle;
 use cce_ui::engine::{Application, EngineState, LogicalPosition, LogicalSize, WindowSettings};
 use cce_ui::scene::layout::Rect;
 use cce_ui::scene::paint::{DisplayList, PaintCtx};
+use cce_ui::widget::scroll_motion::{Bounds, ScrollMotion};
 use cce_ui::widget::{ElementState, Key, KeyEvent, MouseButton, MouseScrollDelta, NamedKey, Position};
 
 use doc::{Document, PageStore, Rendered, IMAGE_EXTS};
@@ -56,6 +57,10 @@ struct PreviewApp {
     zoom: f64,
     /// Scroll offset in screen px; 0 when the content fits the window.
     scroll: (f64, f64),
+    /// Drives `scroll` (the drawn value) from the wheel: notches glide,
+    /// fingers track 1:1 and fling on the lift. Drag, keyboard and zoom
+    /// write `scroll` directly; the motion adopts those through `reconcile`.
+    scroll_motion: ScrollMotion,
     /// Refit on resize until the user zooms manually.
     fit: bool,
     win: (f32, f32),
@@ -117,6 +122,32 @@ impl PreviewApp {
         self.scroll.0 += dx;
         self.scroll.1 += dy;
         self.clamp_scroll();
+    }
+
+    /// The wheel's range per axis, `0..=overflow` — what `clamp_scroll` clamps to.
+    fn scroll_bounds(&self) -> (Bounds, Bounds) {
+        let (_, cw, ch) = self.layout();
+        let (w, h) = (self.win.0 as f64, self.win.1 as f64);
+        (Bounds::max((cw * self.zoom - w) as f32), Bounds::max((ch * self.zoom - h) as f32))
+    }
+
+    /// Copy the motion's position into `scroll` exactly (the f32 round-trips
+    /// losslessly, so the next `reconcile` sees no host write).
+    fn sync_scroll_from_motion(&mut self) {
+        self.scroll = (self.scroll_motion.x.pos() as f64, self.scroll_motion.y.pos() as f64);
+    }
+
+    /// Per-frame wheel glide/coast; true while `scroll` is still moving, so
+    /// the frame loop keeps drawing.
+    fn tick_scroll(&mut self, dt: f32) -> bool {
+        self.scroll_motion.reconcile(self.scroll.0 as f32, self.scroll.1 as f32);
+        if !self.scroll_motion.is_animating() {
+            return false;
+        }
+        let (bx, by) = self.scroll_bounds();
+        let moved = self.scroll_motion.tick(dt, bx, by);
+        self.sync_scroll_from_motion();
+        moved || self.scroll_motion.is_animating()
     }
 
     /// Multiply zoom, keeping the document point under (px, py) fixed.
@@ -266,6 +297,7 @@ impl Application for PreviewApp {
             quarter_turns: 0,
             zoom: 1.0,
             scroll: (0.0, 0.0),
+            scroll_motion: ScrollMotion::new(),
             fit: true,
             win: (900.0, 700.0),
             scale: 1.0,
@@ -320,7 +352,11 @@ impl Application for PreviewApp {
         }
     }
 
-    fn tick(&mut self, _dt: f32, _needs_rebuild: &mut bool) {}
+    fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
+        if self.tick_scroll(dt) {
+            *needs_rebuild = true;
+        }
+    }
 
     fn handle_resize(&mut self, width: f32, height: f32, scale: f64) {
         self.win = (width, height);
@@ -359,18 +395,31 @@ impl Application for PreviewApp {
     }
 
     fn handle_mouse_wheel(&mut self, delta: &MouseScrollDelta, pos: LogicalPosition, needs_rebuild: &mut bool) {
-        let (nx, ny) = Self::notches(delta);
-        if nx == 0.0 && ny == 0.0 {
+        if self.ctrl {
+            // Zoom stays instant: a notch (or 60px of finger) is one 1.1 step.
+            let (_, ny) = Self::notches(delta);
+            if ny != 0.0 {
+                self.zoom_at(1.1f64.powf(ny), pos.x as f64, pos.y as f64);
+                *needs_rebuild = true;
+            }
             return;
         }
-        if self.ctrl {
-            self.zoom_at(1.1f64.powf(ny), pos.x as f64, pos.y as f64);
-        } else if self.shift {
-            self.scroll_by(-ny * WHEEL_SCROLL_PX, 0.0);
-        } else {
-            self.scroll_by(-nx * WHEEL_SCROLL_PX, -ny * WHEEL_SCROLL_PX);
+        // Plain wheel: a 2-D scroll through the motion — a notch is
+        // WHEEL_SCROLL_PX, pixel deltas are 1:1; shift turns the vertical
+        // motion horizontal. `tick_scroll` carries `scroll` after it.
+        let line = WHEEL_SCROLL_PX as f32;
+        let (mut dx, mut dy) = ScrollMotion::delta_px(delta, (line, line));
+        if self.shift {
+            dx = dy;
+            dy = 0.0;
         }
-        *needs_rebuild = true;
+        let discrete = matches!(delta, MouseScrollDelta::LineDelta(..));
+        let (bx, by) = self.scroll_bounds();
+        self.scroll_motion.reconcile(self.scroll.0 as f32, self.scroll.1 as f32);
+        if self.scroll_motion.apply_px(dx, dy, discrete, bx, by) {
+            self.sync_scroll_from_motion();
+            *needs_rebuild = true;
+        }
     }
 
     fn handle_pinch(&mut self, factor: f32, pos: LogicalPosition, needs_rebuild: &mut bool) -> bool {
