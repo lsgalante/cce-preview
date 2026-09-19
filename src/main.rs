@@ -69,6 +69,10 @@ struct PreviewApp {
     drag: Option<(f64, f64)>,
     ctrl: bool,
     shift: bool,
+    /// Whether a renderer has been handed over yet — the first one is the
+    /// process's own, any later one is a replacement after a reconnect.
+    /// See `renderer_init`.
+    seen_renderer: bool,
 }
 
 /// Per-page layout rect in document units.
@@ -305,6 +309,7 @@ impl Application for PreviewApp {
             drag: None,
             ctrl: false,
             shift: false,
+            seen_renderer: false,
         };
         let args: Vec<PathBuf> = std::env::args_os().skip(1).map(PathBuf::from).collect();
         match args.len() {
@@ -355,6 +360,32 @@ impl Application for PreviewApp {
     fn tick(&mut self, dt: f32, needs_rebuild: &mut bool) {
         if self.tick_scroll(dt) {
             *needs_rebuild = true;
+        }
+    }
+
+    /// Throw the resident pages away when the renderer is replaced.
+    ///
+    /// `PageStore` holds **renderer** image ids, and a renderer does not
+    /// outlive its session: `cce-ui`'s `window_runner` repairs a lost Wayland
+    /// transport by opening a new session around the same `Application`, which
+    /// rebuilds the renderer and with it the image table. The cached ids then
+    /// name images that no longer exist, and a draw for an unknown id is
+    /// skipped rather than reported — so a reconnected viewer came back with
+    /// its chrome and a blank document, and stayed that way, because a
+    /// resident page is never re-rendered.
+    ///
+    /// `reset` is exactly the right hammer: it frees every page (a free for an
+    /// id the new renderer never had is a no-op) and bumps the generation, so
+    /// a render still in flight for the old session is dropped on arrival
+    /// instead of landing as a page nobody asked for. The next `display_list`
+    /// finds nothing resident and queues the visible pages again.
+    ///
+    /// Not on the first renderer: the pages queued from `new()` are waiting
+    /// for precisely that one.
+    fn renderer_init(&mut self, _renderer: &mut cce_ui::vk::VkRenderer) {
+        if std::mem::replace(&mut self.seen_renderer, true) {
+            log::info!("[preview] renderer replaced; re-rendering the resident pages");
+            self.store.reset();
         }
     }
 
