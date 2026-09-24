@@ -520,7 +520,9 @@ impl Application for PreviewApp {
         self.scale = scale;
         self.store.begin_frame();
         let mut pc = PaintCtx::new();
-        pc.quad(Rect { x: 0.0, y: 0.0, width: size.width, height: size.height }, self.clear_color());
+        // The standard root plate (cce-ui PlateSpec::window); the document is
+        // full-bleed content drawn on it.
+        pc.root_plate(size.width, size.height);
 
         if self.doc.is_none() {
             let msg = self.error.as_deref().unwrap_or("Press 'o' to open a file");
