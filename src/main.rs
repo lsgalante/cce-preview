@@ -28,7 +28,10 @@ use doc::{Document, PageStore, Rendered, IMAGE_EXTS};
 /// uniformly with zoom and anchored zooming stays exact).
 const GAP_UNITS: f64 = 12.0;
 /// Margin left around a fitted page.
-const FIT_MARGIN: f64 = 24.0;
+/// Room around a fitted page: the root plate's inset on each side.
+fn fit_margin() -> f64 {
+    2.0 * cce_ui::layout::root_plate_inset() as f64
+}
 const WHEEL_SCROLL_PX: f64 = 48.0;
 const KEY_SCROLL_PX: f64 = 80.0;
 const ZOOM_MIN: f64 = 0.05;
@@ -184,7 +187,7 @@ impl PreviewApp {
     fn fit_page(&mut self, page: usize) {
         let (rects, _, _) = self.layout();
         let Some(r) = rects.get(page) else { return };
-        let (w, h) = ((self.win.0 as f64 - FIT_MARGIN).max(64.0), (self.win.1 as f64 - FIT_MARGIN).max(64.0));
+        let (w, h) = ((self.win.0 as f64 - fit_margin()).max(64.0), (self.win.1 as f64 - fit_margin()).max(64.0));
         self.zoom = (w / r.w).min(h / r.h).clamp(ZOOM_MIN, ZOOM_MAX);
         self.fit = true;
         self.scroll = (0.0, r.y * self.zoom);
@@ -526,7 +529,7 @@ impl Application for PreviewApp {
 
         if self.doc.is_none() {
             let msg = self.error.as_deref().unwrap_or("Press 'o' to open a file");
-            pc.text(msg, 24.0, size.height / 2.0 - 8.0, 14.0, [180, 180, 180]);
+            pc.text(msg, cce_ui::layout::root_plate_inset(), size.height / 2.0 - 8.0, 14.0, [180, 180, 180]);
             return Some(pc.finish());
         }
 
@@ -578,9 +581,13 @@ impl Application for PreviewApp {
             hud.push_str(&format!("   ·   {}/{}", self.file_idx + 1, self.files.len()));
         }
         hud.push_str(&format!("   ·   {:.0}%", self.zoom * 100.0));
-        let w = 24.0 + hud.chars().count() as f32 * 6.6;
-        pc.quad(Rect { x: 8.0, y: 8.0, width: w, height: 24.0 }, [0.0, 0.0, 0.0, 0.45]);
-        pc.text(hud, 16.0, 13.0, 12.0, [230, 230, 230]);
+        // The HUD stands the root plate's inset off the window corner, its
+        // text the control text inset inside the box.
+        let inset = cce_ui::layout::root_plate_inset();
+        let text_in = cce_ui::layout::CONTROL_TEXT_INSET;
+        let w = 2.0 * text_in + hud.chars().count() as f32 * 6.6;
+        pc.quad(Rect { x: inset, y: inset, width: w, height: 24.0 }, [0.0, 0.0, 0.0, 0.45]);
+        pc.text(hud, inset + text_in, inset + 5.0, 12.0, [230, 230, 230]);
 
         Some(pc.finish())
     }
